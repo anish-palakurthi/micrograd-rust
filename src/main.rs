@@ -35,6 +35,22 @@ impl Value {
         res
 
     }
+
+    fn relu(mut self) {
+        let res_data = match (self.data < 0.0){
+            true => Value::new(0.0, vec![&self as *const Value], "ReLU".to_string()),
+            false => Value::new(self.data, vec![&self as *const Value], "ReLU".to_string()),
+        };
+
+        let backward = {
+            move || {
+                self.grad += (res.)
+            }
+
+        }
+    }
+
+    fn backward(self){}
 }
 
 impl ops::Add for Value {
@@ -103,6 +119,8 @@ impl ops::Div<Value> for Value {
         self * rhs.pow(-1.0)
     }
 }
+
+
 
 
 impl Display for Value{
