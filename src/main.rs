@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fmt::*;
 use std::fmt;
 use std::ops;
@@ -6,13 +5,13 @@ use std::ops;
 struct Value {
     data: f32, 
     grad: f32, 
-    prev: Vec<usize>,
+    prev: Vec<*const Value>,
     operator: String,
     backward: Box<dyn FnMut()>,
 }
 
 impl Value {
-    fn new(data: f32, prev: Vec<usize>, operator: String) -> Self {
+    fn new(data: f32, prev: Vec<*const Value>, operator: String) -> Self {
         Self {
             data,
             grad: 0.0,
@@ -21,15 +20,30 @@ impl Value {
             backward: Box::new(|| {}),
         }
     }
+
+    fn pow(mut self, rhs: f32) -> Value {
+        let pow_data = self.data.powf(rhs);
+
+        let mut res = Value::new(pow_data, vec![&self as *const Value], "**".to_string());
+
+        let backward = {
+            move || {
+                self.grad += (rhs * self.data.powf(rhs - 1.0)) * res.grad;
+            }
+        };
+        res.backward = Box::new(backward);
+        res
+
+    }
 }
 
-impl ops::Add<Value> for Value {
+impl ops::Add for Value {
     type Output = Value;
 
     fn add(mut self, mut rhs: Value) -> Value {
         let sum_data = self.data + rhs.data;
 
-        let mut res = Value::new(sum_data, vec![&self as *const _ as usize, &rhs as *const _ as usize],  "+".to_string());
+        let mut res = Value::new(sum_data, vec![&self as *const Value, &rhs as *const Value], "+".to_string());
 
         let backward = {
             let res_grad = res.grad;
@@ -44,6 +58,53 @@ impl ops::Add<Value> for Value {
     }
 }
 
+impl ops::Mul for Value {
+    type Output = Value;
+
+    fn mul(mut self, mut rhs: Value) -> Value {
+        let prod_data = self.data * rhs.data;
+
+        let mut res = Value::new(prod_data, vec![&self as *const Value, &rhs as *const Value], "*".to_string());
+
+        let backward = {
+            let res_grad = res.grad;
+            move || {
+                self.grad += rhs.data * res_grad;
+                rhs.grad += self.data * res_grad;
+            }
+        };
+
+        res.backward = Box::new(backward);
+        res
+    }
+}
+
+impl ops::Neg for Value {
+    type Output = Value;
+
+    fn neg(mut self) -> Self::Output {
+        self.data = -1.0 * self.data;
+        self
+    }
+}
+
+impl ops::Sub<Value> for Value {
+    type Output = Value;
+
+    fn sub(self, rhs: Value) -> Self::Output {
+        self + (-rhs)
+    }
+}
+
+impl ops::Div<Value> for Value {
+    type Output = Value;
+
+    fn div(self, rhs: Value) -> Self::Output {
+        self * rhs.pow(-1.0)
+    }
+}
+
+
 impl Display for Value{
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -56,7 +117,7 @@ impl Display for Value{
 
 fn main(){
 
-    let example = Value::new(1.0, vec![1, 2], "+".to_string());
+    let example = Value::new(1.0, vec![], "+".to_string());
 
     println!("Example!: {}", example);
 
