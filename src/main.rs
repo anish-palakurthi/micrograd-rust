@@ -36,21 +36,44 @@ impl Value {
 
     }
 
-    fn relu(mut self) {
-        let res_data = match (self.data < 0.0){
+    fn relu(mut self) -> Value {
+        let mut res = match (self.data < 0.0){
             true => Value::new(0.0, vec![&self as *const Value], "ReLU".to_string()),
             false => Value::new(self.data, vec![&self as *const Value], "ReLU".to_string()),
         };
 
         let backward = {
             move || {
-                self.grad += (res.)
+                self.grad += (res.data > 0.0) as i32 as f32 * res.grad;
             }
-
-        }
+        };
+        res.backward = Box::new(backward);
+        res
     }
 
-    fn backward(self){}
+    fn build_top(v: &Value, topo: &mut Vec<*const Value>, visited: &mut Vec<*const Value>) {
+        if visited.contains(&(v as *const Value)) {
+            return;
+        }
+        visited.push(v as *const Value);
+        for prev in v.prev.iter() {
+            Self::build_top(unsafe { &**prev }, topo, visited);
+        }
+        topo.push(v as *const Value);
+    }
+
+    fn backward(mut self) {
+        let mut topo: Vec<*const Value> = vec![];
+        let mut visited: Vec<*const Value> = vec![];
+
+        Self::build_top(&self, &mut topo, &mut visited);
+        self.grad = 1.0;
+
+        let reversed_topo = topo.iter().rev();
+        for v in reversed_topo {
+            (unsafe { &mut **(v as *mut Value) }.backward)();
+        }
+    }
 }
 
 impl ops::Add for Value {
