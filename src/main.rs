@@ -1,7 +1,7 @@
 use std::fmt::*;
 use std::fmt;
 use std::ops;
-
+use std::collections::HashSet;
 struct Value {
     data: f32, 
     grad: f32, 
@@ -51,27 +51,27 @@ impl Value {
         res
     }
 
-    fn build_top(v: &Value, topo: &mut Vec<*const Value>, visited: &mut Vec<*const Value>) {
-        if visited.contains(&(v as *const Value)) {
+    fn build_topo(v: &Value, topo: &mut Vec<*const Value>, visited: &mut HashSet<*const Value>) {
+        if !visited.insert(v as *const Value) {
             return;
         }
-        visited.push(v as *const Value);
-        for prev in v.prev.iter() {
-            Self::build_top(unsafe { &**prev }, topo, visited);
+        for prev in &v.prev {
+            Self::build_topo(unsafe { &**prev }, topo, visited);
         }
         topo.push(v as *const Value);
     }
-
-    fn backward(mut self) {
-        let mut topo: Vec<*const Value> = vec![];
-        let mut visited: Vec<*const Value> = vec![];
-
-        Self::build_top(&self, &mut topo, &mut visited);
+    
+    fn backward(&mut self) {
+        let mut topo: Vec<*const Value> = Vec::new();
+        let mut visited: HashSet<*const Value> = HashSet::new();
+    
+        Self::build_topo(self, &mut topo, &mut visited);
         self.grad = 1.0;
-
-        let reversed_topo = topo.iter().rev();
-        for v in reversed_topo {
-            (unsafe { &mut **(v as *mut Value) }.backward)();
+    
+        for &v in topo.iter().rev() {
+            unsafe {
+                (&mut *(v as *mut Value)).backward();
+            }
         }
     }
 }
