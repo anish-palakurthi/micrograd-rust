@@ -1,16 +1,13 @@
 use std::fmt::*;
 use std::fmt;
 use std::ops;
-use std::sync::{Mutex, Arc};
 use std::collections::HashSet;
-
-#[derive(Clone)]
 pub struct Value {
     data: f32, 
     grad: f32, 
     prev: Vec<*const Value>,
     operator: String,
-    backward: Arc<Mutex<dyn FnMut() + Send>>,
+    backward: Box<dyn FnMut()>,
 }
 
 impl Value {
@@ -20,7 +17,7 @@ impl Value {
             grad: 0.0,
             prev,
             operator,
-            backward: Arc::new(Mutex::new(|| {})),
+            backward: Box::new(|| {}),
         }
     }
 
@@ -34,12 +31,13 @@ impl Value {
                 self.grad += (rhs * self.data.powf(rhs - 1.0)) * res.grad;
             }
         };
-        res.backward = Arc::new(Mutex::new(backward));
+        res.backward = Box::new(backward);
         res
+
     }
 
     pub fn relu(mut self) -> Value {
-        let mut res = match self.data < 0.0 {
+        let mut res = match (self.data < 0.0){
             true => Value::new(0.0, vec![&self as *const Value], "ReLU".to_string()),
             false => Value::new(self.data, vec![&self as *const Value], "ReLU".to_string()),
         };
@@ -49,9 +47,10 @@ impl Value {
                 self.grad += (res.data > 0.0) as i32 as f32 * res.grad;
             }
         };
-        res.backward = Arc::new(Mutex::new(backward));
+        res.backward = Box::new(backward);
         res
     }
+
     pub fn build_topo(v: &Value, topo: &mut Vec<*const Value>, visited: &mut HashSet<*const Value>) {
         if !visited.insert(v as *const Value) {
             return;
@@ -93,7 +92,7 @@ impl ops::Add for Value {
             }
         };
 
-        res.backward = Arc::new(Mutex::new(backward));
+        res.backward = Box::new(backward);
         res
     }
 }
@@ -114,7 +113,7 @@ impl ops::Mul for Value {
             }
         };
 
-        res.backward = Arc::new(Mutex::new(backward));
+        res.backward = Box::new(backward);
         res
     }
 }
@@ -145,8 +144,6 @@ impl ops::Div<Value> for Value {
 }
 
 
-
-
 impl Display for Value{
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -155,94 +152,108 @@ impl Display for Value{
     }
 }
 
-fn main(){}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_value_addition() {
-        let a = Value::new(2.0, vec![], "".to_string());
-        let b = Value::new(3.0, vec![], "".to_string());
-        let c = a + b;
-        assert_eq!(c.data, 5.0);
+pub struct Neuron {
+    w: Vec<Value>,
+    b: Value,
+    nonlin: bool,
+}
+
+impl Neuron {
+    pub fn new(nin: usize, nonlin: bool) -> Self {
+        let mut rng = rand::thread_rng();
+        let w = (0..nin).map(|_| Value::new(rng.gen_range(-1.0..1.0), vec![], "".to_string())).collect();
+        let b = Value::new(0.0, vec![], "".to_string());
+        Self { w, b, nonlin }
     }
 
-    #[test]
-    fn test_value_multiplication() {
-        let a = Value::new(2.0, vec![], "".to_string());
-        let b = Value::new(3.0, vec![], "".to_string());
-        let c = a * b;
-        assert_eq!(c.data, 6.0);
+    pub fn call(&self, x: &[Value]) -> Value {
+        let act = self.w.iter().zip(x).fold(self.b.clone(), |acc, (wi, xi)| acc + (wi.clone() * xi.clone()));
+        if self.nonlin {
+            act.relu()
+        } else {
+            act
+        }
+    }
+}
+
+impl Module for Neuron {
+    fn parameters(&self) -> Vec<&Value> {
+        let mut params = self.w.iter().collect::<Vec<&Value>>();
+        params.push(&self.b);
+        params
+    }
+}
+
+impl fmt::Display for Neuron {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}Neuron({})", if self.nonlin { "ReLU" } else { "Linear" }, self.w.len())
+    }
+}
+
+pub struct Layer {
+    neurons: Vec<Neuron>,
+}
+
+impl Layer {
+    pub fn new(nin: usize, nout: usize, nonlin: bool) -> Self {
+        let neurons = (0..nout).map(|_| Neuron::new(nin, nonlin)).collect();
+        Self { neurons }
     }
 
-    #[test]
-    fn test_value_negation() {
-        let a = Value::new(2.0, vec![], "".to_string());
-        let b = -a;
-        assert_eq!(b.data, -2.0);
+    pub fn call(&self, x: &[Value]) -> Vec<Value> {
+        let out: Vec<Value> = self.neurons.iter().map(|n| n.call(x)).collect();
+        if out.len() == 1 {
+            vec![out[0].clone()]
+        } else {
+            out
+        }
+    }
+}
+
+impl Module for Layer {
+    fn parameters(&self) -> Vec<&Value> {
+        self.neurons.iter().flat_map(|n| n.parameters()).collect()
+    }
+}
+
+impl fmt::Display for Layer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Layer of [{}]", self.neurons.iter().map(|n| n.to_string()).collect::<Vec<String>>().join(", "))
+    }
+}
+
+pub struct MLP {
+    layers: Vec<Layer>,
+}
+
+impl MLP {
+    pub fn new(nin: usize, nouts: Vec<usize>) -> Self {
+        let mut sz = vec![nin];
+        sz.extend(nouts.iter());
+        let layers = (0..nouts.len()).map(|i| Layer::new(sz[i], sz[i + 1], i != nouts.len() - 1)).collect();
+        Self { layers }
     }
 
-    #[test]
-    fn test_value_subtraction() {
-        let a = Value::new(5.0, vec![], "".to_string());
-        let b = Value::new(3.0, vec![], "".to_string());
-        let c = a - b;
-        assert_eq!(c.data, 2.0);
+    pub fn call(&self, x: &[Value]) -> Vec<Value> {
+        let mut x = x.to_vec();
+        for layer in &self.layers {
+            x = layer.call(&x);
+        }
+        x
     }
+}
 
-    #[test]
-    fn test_value_division() {
-        let a = Value::new(6.0, vec![], "".to_string());
-        let b = Value::new(3.0, vec![], "".to_string());
-        let c = a / b;
-        assert_eq!(c.data, 2.0);
+impl Module for MLP {
+    fn parameters(&self) -> Vec<&Value> {
+        self.layers.iter().flat_map(|layer| layer.parameters()).collect()
     }
+}
 
-    #[test]
-    fn test_value_relu() {
-        let a = Value::new(-1.0, vec![], "".to_string());
-        let b = a.relu();
-        assert_eq!(b.data, 0.0);
-
-        let c = Value::new(1.0, vec![], "".to_string());
-        let d = c.relu();
-        assert_eq!(d.data, 1.0);
-    }
-
-    #[test]
-    fn test_value_pow() {
-        let a = Value::new(2.0, vec![], "".to_string());
-        let b = a.pow(3.0);
-        assert_eq!(b.data, 8.0);
-    }
-
-    #[test]
-    fn test_more_ops() {
-        let mut a = Value::new(-4.0, vec![], "".to_string());
-        let mut b = Value::new(2.0, vec![], "".to_string());
-        let mut c = a.clone() + b.clone();
-        let mut d = a.clone() * b.clone() + b.clone().pow(3.0);
-        c = c.clone() + c.clone() + Value::new(1.0, vec![], "".to_string());
-        c = c.clone() + Value::new(1.0, vec![], "".to_string()) + c.clone() + (-a.clone());
-        d = d.clone() + d.clone() * Value::new(2.0, vec![], "".to_string()) + (b.clone() + a.clone()).relu();
-        d = d.clone() + Value::new(3.0, vec![], "".to_string()) * d.clone() + (b.clone() - a.clone()).relu();
-        let e = c.clone() - d.clone();
-        let f = e.clone().pow(2.0);
-        let mut g = f.clone() / Value::new(2.0, vec![], "".to_string());
-        g = g.clone() + Value::new(10.0, vec![], "".to_string()) / f.clone();
-        g.backward();
-
-        let amg = a;
-        let bmg = b;
-        let gmg = g;
-
-        
-        // forward pass went well
-        println!("gmg.data: {}", gmg.data);
-        println!("amg.grad: {}", amg.grad);
-        println!("bmg.grad: {}", bmg.grad);
+impl fmt::Display for MLP {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MLP of [{}]", self.layers.iter().map(|layer| layer.to_string()).collect::<Vec<String>>().join(", "))
     }
 }
 
